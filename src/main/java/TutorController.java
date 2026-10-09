@@ -70,9 +70,13 @@ public class TutorController implements HttpHandler {
                     break;
                 case "cancel":
                     int appId = this.parseInt(this.getField(formData, "appointmentId"));
-                    this.repo.cancelAppointment(appId, this.currentUser);
-                    message = "✅ Refunded.";
-                    messageType = "success";
+                    if (this.repo.cancelAppointment(appId, this.currentUser)) {
+                        message = "✅ Refunded.";
+                        messageType = "success";
+                    } else {
+                        message = "❌ Could not cancel this booking.";
+                        messageType = "error";
+                    }
                     break;
                 case "review":
                     int rTid = this.parseInt(this.getField(formData, "tutorId"));
@@ -102,19 +106,20 @@ public class TutorController implements HttpHandler {
     }
 
     private String handleBooking(int tutorId, String date, int hours) {
-        if (this.currentUser != null && tutorId > 0 && !date.isEmpty()) {
+        if (this.currentUser != null && tutorId > 0 && hours > 0 && !date.isEmpty()) {
             if (this.repo.isTutorBooked(tutorId, date)) {
                 return "⚠️ Tutor is busy on this date.";
             } else if (this.repo.isStudentBooked(this.currentUser, date)) {
                 return "⚠️ You are busy on this date.";
             } else {
                 double cost = this.repo.getTutorPrice(tutorId) * (double)hours;
-                if (this.repo.getUserBudget(this.currentUser) < cost) {
-                    return "❌ Insufficient Funds.";
-                } else {
-                    this.repo.processPayment(this.currentUser, cost);
-                    this.repo.saveAppointment(tutorId, this.currentUser, date, hours, cost);
-                    return "✅ Booked!";
+                switch (this.repo.bookAppointment(tutorId, this.currentUser, date, hours, cost)) {
+                    case BOOKED:
+                        return "✅ Booked!";
+                    case INSUFFICIENT_FUNDS:
+                        return "❌ Insufficient Funds.";
+                    default:
+                        return "❌ Booking failed, please try again.";
                 }
             }
         } else {

@@ -146,46 +146,86 @@ public class TutorRepository {
         return (double)0.0F;
     }
 
-    public void processPayment(String u, double amt) {
+    public enum BookingResult { BOOKED, INSUFFICIENT_FUNDS, FAILED }
+
+    // Charges the student and saves the appointment in one transaction:
+    // either both happen or neither does.
+    public BookingResult bookAppointment(int tid, String student, String date, int hours, double cost) {
+        Connection c = DatabaseConnection.getConnection();
         try {
-            Connection c = DatabaseConnection.getConnection();
-            PreparedStatement ps = c.prepareStatement("UPDATE users SET budget=budget-? WHERE username=?");
-            ps.setDouble(1, amt);
-            ps.setString(2, u);
-            ps.executeUpdate();
-        } catch (Exception var6) {
-        }
+            c.setAutoCommit(false);
 
-    }
-
-    public void saveAppointment(int tid, String s, String d, int h, double c) {
-        try {
-            Connection cn = DatabaseConnection.getConnection();
-            PreparedStatement ps = cn.prepareStatement("INSERT INTO appointments (tutor_id,student_name,meeting_date,duration,total_cost) VALUES (?,?,?,?,?)");
-            ps.setInt(1, tid);
-            ps.setString(2, s);
-            ps.setString(3, d);
-            ps.setInt(4, h);
-            ps.setDouble(5, c);
-            ps.executeUpdate();
-        } catch (Exception var9) {
-        }
-
-    }
-
-    public void cancelAppointment(int aid, String u) {
-        try {
-            Connection c = DatabaseConnection.getConnection();
-            PreparedStatement ps = c.prepareStatement("SELECT total_cost FROM appointments WHERE id=?");
-            ps.setInt(1, aid);
-            ResultSet rs = ps.executeQuery();
-            if (rs.next()) {
-                this.addFunds(u, rs.getDouble(1));
-                c.prepareStatement("DELETE FROM appointments WHERE id=" + aid).executeUpdate();
+            // Conditional update: only succeeds if the budget still covers the cost at this moment
+            PreparedStatement pay = c.prepareStatement("UPDATE users SET budget=budget-? WHERE username=? AND budget>=?");
+            pay.setDouble(1, cost);
+            pay.setString(2, student);
+            pay.setDouble(3, cost);
+            if (pay.executeUpdate() == 0) {
+                c.rollback();
+                return BookingResult.INSUFFICIENT_FUNDS;
             }
-        } catch (Exception var6) {
-        }
 
+            PreparedStatement ps = c.prepareStatement("INSERT INTO appointments (tutor_id,student_name,meeting_date,duration,total_cost) VALUES (?,?,?,?,?)");
+            ps.setInt(1, tid);
+            ps.setString(2, student);
+            ps.setString(3, date);
+            ps.setInt(4, hours);
+            ps.setDouble(5, cost);
+            ps.executeUpdate();
+
+            c.commit();
+            return BookingResult.BOOKED;
+        } catch (Exception e) {
+            rollbackQuietly(c);
+            return BookingResult.FAILED;
+        } finally {
+            resetAutoCommit(c);
+        }
+    }
+
+    // Deletes the appointment and refunds its cost in one transaction.
+    // Only the student who booked it can cancel it.
+    public boolean cancelAppointment(int aid, String u) {
+        Connection c = DatabaseConnection.getConnection();
+        try {
+            c.setAutoCommit(false);
+
+            PreparedStatement del = c.prepareStatement("DELETE FROM appointments WHERE id=? AND student_name=? RETURNING total_cost");
+            del.setInt(1, aid);
+            del.setString(2, u);
+            ResultSet rs = del.executeQuery();
+            if (!rs.next()) {
+                c.rollback();
+                return false;
+            }
+
+            PreparedStatement refund = c.prepareStatement("UPDATE users SET budget=budget+? WHERE username=?");
+            refund.setDouble(1, rs.getDouble("total_cost"));
+            refund.setString(2, u);
+            refund.executeUpdate();
+
+            c.commit();
+            return true;
+        } catch (Exception e) {
+            rollbackQuietly(c);
+            return false;
+        } finally {
+            resetAutoCommit(c);
+        }
+    }
+
+    private void rollbackQuietly(Connection c) {
+        try {
+            c.rollback();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void resetAutoCommit(Connection c) {
+        try {
+            c.setAutoCommit(true);
+        } catch (Exception ignored) {
+        }
     }
 
     public void saveReview(int tid, int stars, String txt, String sname) {
